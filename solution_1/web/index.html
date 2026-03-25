@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Edge Inference: Tire Tracker</title>
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+    <style>
+        canvas { position: absolute; top: 0; left: 0; pointer-events: none; }
+        #container { position: relative; display: inline-block; }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <video id="videoFeed" controls width="640" height="480" crossorigin="anonymous">
+            <source src="tire_video.mp4" type="video/mp4">
+        </video>
+        <canvas id="overlayCanvas" width="640" height="480"></canvas>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Siamese Tracker Edge</title>
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+    <style>
+        #container { position: relative; display: inline-block; cursor: crosshair; }
+        canvas { position: absolute; top: 0; left: 0; }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <video id="videoFeed" width="640" height="480" src="tire_video.mp4" controls></video>
+        <canvas id="uiCanvas" width="640" height="480"></canvas>
+    </div>
+    <p>Instructions: Pause video -> Drag box over tire -> Play video.</p>
+    <div>
+        <button id="playBtn">Play Tracker</button>
+        <button id="pauseBtn">Pause</button>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>

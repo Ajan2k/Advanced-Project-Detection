@@ -1,0 +1,4 @@
+train: D:/ml/project/object-detection/data/dataset/images/train/
+val: D:/ml/project/object-detection/data/dataset/images/train/  # Using train for val temporarily (no separate val split yet)
+nc: 1
+names: ['tire']

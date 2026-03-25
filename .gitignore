@@ -1,0 +1,101 @@
+# ========================
+# Python
+# ========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
+
+# ========================
+# Virtual Environment
+# ========================
+.venv/
+venv/
+env/
+
+# ========================
+# CVAT (Annotation Tool)
+# ========================
+cvat/
+
+# ========================
+# Model Weights & Checkpoints
+# ========================
+*.pth
+*.pth.tar
+*.pt
+*.onnx
+*.onnx.data
+*.engine
+*.tflite
+
+# ========================
+# Video Files
+# ========================
+*.mp4
+*.avi
+*.mkv
+*.mov
+*.wmv
+
+# ========================
+# Image & Data Files
+# ========================
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.zip
+*.tar.gz
+
+# ========================
+# Extracted Frames (too large for git)
+# ========================
+faster-rcnn/data/frames/
+faster-rcnn/data/dataset/
+solution_1/data/frames/
+solution_1/data/dataset/images/
+data/dataset/images/
+
+# ========================
+# Training Outputs
+# ========================
+runs/
+output/
+*.log
+
+# ========================
+# OSTrack Repository (cloned)
+# ========================
+Siamese_tracker/OSTrack/
+
+# ========================
+# IDE / Editor
+# ========================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ========================
+# OS Files
+# ========================
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ========================
+# Jupyter Notebook Checkpoints
+# ========================
+.ipynb_checkpoints/
+
+# ========================
+# Misc
+# ========================
+*.docx
+/tmp/
