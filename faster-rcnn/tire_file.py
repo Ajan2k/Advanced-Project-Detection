@@ -376,7 +376,7 @@ if __name__ == "__main__":
             print("No labeled data found for training. Please add XML labels to 'data/labels' to train.")
 
     if os.path.exists(VIDEO_PATH):
-        output_file = "output.mp4"
+        output_file = "output.avi"
         print(f"Running inference to process the video... Saving to {output_file}")
         run_inference(model, VIDEO_PATH, output_file)
         print("Processing complete.")
