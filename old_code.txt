@@ -13,8 +13,6 @@ from torchvision.models.detection import FasterRCNN
 from torchvision.models.detection.rpn import AnchorGenerator
 from torchvision.ops import MultiScaleRoIAlign
 from deep_sort_realtime.deepsort_tracker import DeepSort
-from torchvision.ops import nms
-import random
 
 # --- Configuration ---
 DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -41,12 +39,12 @@ def extract_frames(video_path):
     return count
 
 class TireDataset(Dataset):
-    def __init__(self, frame_dir, label_dir, transforms=None, augment=True):
+    def __init__(self, frame_dir, label_dir, transforms=None):
         img_files = {os.path.splitext(f)[0]: os.path.join(frame_dir, f) 
                      for f in os.listdir(frame_dir) if f.endswith('.jpg')}
         xml_files = {os.path.splitext(f)[0]: os.path.join(label_dir, f) 
                      for f in os.listdir(label_dir) if f.endswith('.xml')}
-
+        
         common_names = sorted(list(set(img_files.keys()) & set(xml_files.keys())))
         
         # Filter out XMLs that have no bounding boxes (empty annotations from CVAT)
@@ -69,38 +67,6 @@ class TireDataset(Dataset):
             print(f"Skipped {skipped} frames with no valid annotations.")
         
         self.transforms = transforms or T.ToTensor()
-        self.augment = augment
-
-    def _augment(self, img, boxes):
-        """Apply data augmentation to increase effective dataset size."""
-        w, h = img.size
-        
-        # Random horizontal flip (50% chance)
-        if random.random() > 0.5:
-            img = img.transpose(Image.FLIP_LEFT_RIGHT)
-            if len(boxes) > 0:
-                boxes_arr = np.array(boxes)
-                boxes_arr[:, [0, 2]] = w - boxes_arr[:, [2, 0]]
-                boxes = boxes_arr.tolist()
-        
-        # Random brightness/contrast adjustment
-        if random.random() > 0.5:
-            from torchvision.transforms import functional as F
-            factor = random.uniform(0.7, 1.3)
-            img = F.adjust_brightness(img, factor)
-        
-        if random.random() > 0.5:
-            from torchvision.transforms import functional as F
-            factor = random.uniform(0.7, 1.3)
-            img = F.adjust_contrast(img, factor)
-        
-        # Random slight color jitter
-        if random.random() > 0.5:
-            from torchvision.transforms import functional as F
-            factor = random.uniform(0.8, 1.2)
-            img = F.adjust_saturation(img, factor)
-        
-        return img, boxes
 
     def __getitem__(self, idx):
         img = Image.open(self.frame_paths[idx]).convert("RGB")
@@ -114,14 +80,8 @@ class TireDataset(Dataset):
                 xmlbox = obj.find('bndbox')
                 b = [float(xmlbox.find('xmin').text), float(xmlbox.find('ymin').text),
                      float(xmlbox.find('xmax').text), float(xmlbox.find('ymax').text)]
-                # Validate box dimensions
-                if b[2] > b[0] and b[3] > b[1]:
-                    boxes.append(b)
-                    labels.append(CLASSES[label])
-        
-        # Apply augmentation during training
-        if self.augment and len(boxes) > 0:
-            img, boxes = self._augment(img, boxes)
+                boxes.append(b)
+                labels.append(CLASSES[label])
         
         target = {
             "boxes": torch.as_tensor(boxes, dtype=torch.float32),
@@ -133,42 +93,22 @@ class TireDataset(Dataset):
         return len(self.frame_paths)
 
 def get_model(num_classes):
-    # Load a pre-trained backbone (ResNet50-FPN is much better for detection)
-    backbone = torchvision.models.detection.fasterrcnn_resnet50_fpn(
-        weights="DEFAULT"  # Pre-trained on COCO
-    )
+    # Load a pre-trained backbone
+    backbone = torchvision.models.mobilenet_v3_large(weights="DEFAULT").features
+    backbone.out_channels = 960
     
-    # Replace the classifier head for our number of classes
-    in_features = backbone.roi_heads.box_predictor.cls_score.in_features
-    backbone.roi_heads.box_predictor = torchvision.models.detection.faster_rcnn.FastRCNNPredictor(
-        in_features, num_classes
-    )
+    anchor_generator = AnchorGenerator(sizes=((32, 64, 128, 256, 512),),
+                                       aspect_ratios=((0.5, 1.0, 2.0),) * 5)
     
-    # Tune RPN parameters for small objects like tires
-    # Lower NMS threshold in RPN to reduce duplicate proposals
-    backbone.rpn.nms_thresh = 0.5  # was 0.7 by default — tighter filtering
+    roi_pooler = MultiScaleRoIAlign(featmap_names=['0'], output_size=7, sampling_ratio=2)
     
-    # Increase number of proposals to catch small objects
-    backbone.rpn._pre_nms_top_n['training'] = 2000
-    backbone.rpn._post_nms_top_n['training'] = 1000
-    backbone.rpn._pre_nms_top_n['testing'] = 1000
-    backbone.rpn._post_nms_top_n['testing'] = 500
-    
-    # Tighten the box detector NMS threshold
-    backbone.roi_heads.nms_thresh = 0.3  # default 0.5 — reduces duplicate boxes
-    
-    # Higher score threshold to reject low-confidence predictions
-    backbone.roi_heads.score_thresh = 0.5  # default 0.05
-    
-    return backbone
+    model = FasterRCNN(backbone, num_classes=num_classes,
+                       rpn_anchor_generator=anchor_generator,
+                       box_roi_pool=roi_pooler)
+    return model
 
 def run_inference(model, video_path, output_path="output.mp4"):
-    tracker = DeepSort(
-        max_age=30,       # tracks can survive 30 frames without detection
-        n_init=3,          # require 3 consecutive detections to confirm a track
-        max_iou_distance=0.7,
-        nn_budget=30
-    )
+    tracker = DeepSort(max_age=50, n_init=1)
     cap = cv2.VideoCapture(video_path)
     
     # Get source video properties
@@ -181,13 +121,10 @@ def run_inference(model, video_path, output_path="output.mp4"):
     out = cv2.VideoWriter(output_path.replace('.mp4', '.avi'), fourcc, fps, (width, height))
     
     transform = T.ToTensor()
-    conf_threshold = 0.75       # Higher confidence for cleaner detections
-    nms_iou_threshold = 0.25    # Tighter NMS to remove overlapping boxes
-    min_box_size = 15           # minimum width/height in pixels
-    max_box_size = 300          # maximum width/height (tires shouldn't be huge)
-    max_box_area_ratio = 0.15   # box area shouldn't exceed 15% of frame
+    conf_threshold = 0.7
+    nms_iou_threshold = 0.3
+    min_box_size = 20  # minimum width/height in pixels
     frame_count = 0
-    frame_area = width * height
 
     model.eval()
     with torch.no_grad():
@@ -220,6 +157,7 @@ def run_inference(model, video_path, output_path="output.mp4"):
             
             # Step 2: Apply NMS to remove overlapping boxes
             if len(boxes) > 0:
+                from torchvision.ops import nms
                 keep = nms(boxes, scores, nms_iou_threshold)
                 boxes = boxes[keep]
                 scores = scores[keep]
@@ -229,40 +167,20 @@ def run_inference(model, video_path, output_path="output.mp4"):
             scores_np = scores.cpu().numpy()
             labels_np = labels.cpu().numpy()
             
-            # Step 3: Filter out unreasonable boxes (too tiny, too large, wrong aspect ratio)
+            # Step 3: Filter out tiny boxes (false positives)
             valid = []
             for i, box in enumerate(boxes_np):
                 x1, y1, x2, y2 = box
                 w, h = x2 - x1, y2 - y1
-                box_area = w * h
-                aspect_ratio = max(w, h) / (min(w, h) + 1e-6)
-                
-                # Size constraints
-                if w < min_box_size or h < min_box_size:
-                    continue
-                if w > max_box_size or h > max_box_size:
-                    continue
-                # Area ratio constraint — tire won't occupy huge portion of frame
-                if box_area / frame_area > max_box_area_ratio:
-                    continue
-                # Aspect ratio constraint — tire is roughly circular/square, not super elongated
-                if aspect_ratio > 4.0:
-                    continue
-                
-                valid.append(i)
-            
+                if w >= min_box_size and h >= min_box_size:
+                    valid.append(i)
             boxes_np = boxes_np[valid]
             scores_np = scores_np[valid]
             labels_np = labels_np[valid]
             
-            # Debug: print detection info for first 20 frames
-            if frame_count <= 20:
-                print(f"  Frame {frame_count}: {len(scores_np)} detections "
-                      f"(conf>={conf_threshold}, NMS_IoU={nms_iou_threshold})")
-                for i, (box, score) in enumerate(zip(boxes_np, scores_np)):
-                    x1, y1, x2, y2 = box
-                    print(f"    Det {i}: [{x1:.0f},{y1:.0f},{x2:.0f},{y2:.0f}] "
-                          f"conf={score:.3f} size={x2-x1:.0f}x{y2-y1:.0f}")
+            # Debug: print detection info for first 10 frames
+            if frame_count <= 10:
+                print(f"  Frame {frame_count}: {len(scores_np)} detections (conf>={conf_threshold}, NMS, size>={min_box_size}px)")
             
             # Format detections for DeepSort: list of ([x1, y1, w, h], confidence, class)
             detections = []
@@ -270,7 +188,7 @@ def run_inference(model, video_path, output_path="output.mp4"):
                 x1, y1, x2, y2 = box
                 w, h = x2 - x1, y2 - y1
                 detections.append(([x1, y1, w, h], score, 'tire'))
-
+            
             # Update tracker
             tracks = tracker.update_tracks(detections, frame=frame)
             
@@ -281,13 +199,6 @@ def run_inference(model, video_path, output_path="output.mp4"):
                 track_id = track.track_id
                 ltrb = track.to_ltrb()  # [left, top, right, bottom]
                 x1, y1, x2, y2 = [int(v) for v in ltrb]
-                
-                # Additional check: don't draw unreasonably large tracked boxes
-                tw, th = x2 - x1, y2 - y1
-                if tw > max_box_size or th > max_box_size:
-                    continue
-                if tw * th / frame_area > max_box_area_ratio:
-                    continue
                 
                 # Draw bounding box
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
@@ -302,14 +213,11 @@ def run_inference(model, video_path, output_path="output.mp4"):
     out.release()
     print(f"Output saved to: {output_path.replace('.mp4', '.avi')}")
 
-def train_model(model, dataloader, num_epochs=30):
-    """Training loop with learning rate scheduler for better convergence."""
+def train_model(model, dataloader, num_epochs=5):
+    """Simple training loop for FasterRCNN."""
     model.train()
     params = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.SGD(params, lr=0.005, momentum=0.9, weight_decay=0.0005)
-    
-    # Learning rate scheduler: reduce LR when loss plateaus
-    lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
     
     for epoch in range(num_epochs):
         epoch_loss = 0
@@ -322,18 +230,11 @@ def train_model(model, dataloader, num_epochs=30):
             
             optimizer.zero_grad()
             losses.backward()
-            # Gradient clipping to stabilize training
-            torch.nn.utils.clip_grad_norm_(params, max_norm=5.0)
             optimizer.step()
             epoch_loss += losses.item()
-        
-        lr_scheduler.step()
-        
+            
         if len(dataloader) > 0:
-            avg_loss = epoch_loss / len(dataloader)
-            current_lr = optimizer.param_groups[0]['lr']
-            print(f"Epoch {epoch+1}/{num_epochs} - Avg Loss: {avg_loss:.4f} - LR: {current_lr:.6f}")
-    
+            print(f"Epoch {epoch+1}/{num_epochs} Average Loss: {epoch_loss/len(dataloader):.4f}")
     return model
 
 if __name__ == "__main__":
@@ -362,12 +263,12 @@ if __name__ == "__main__":
         model.load_state_dict(torch.load(model_save_path, map_location=DEVICE))
         print("Model loaded successfully. Skipping training.")
     else:
-        dataset = TireDataset(os.path.join(DATA_DIR, "frames"), os.path.join(DATA_DIR, "labels"), augment=True)
+        dataset = TireDataset(os.path.join(DATA_DIR, "frames"), os.path.join(DATA_DIR, "labels"))
         
         if len(dataset) > 0:
             print(f"Found {len(dataset)} labeled frames. Starting training...")
             dataloader = DataLoader(dataset, batch_size=2, shuffle=True, num_workers=0, collate_fn=lambda x: tuple(zip(*x)))
-            model = train_model(model, dataloader, num_epochs=30)
+            model = train_model(model, dataloader, num_epochs=20)
             # Save trained weights so you don't have to retrain every time
             torch.save(model.state_dict(), model_save_path)
             print(f"Model saved to {model_save_path}")
